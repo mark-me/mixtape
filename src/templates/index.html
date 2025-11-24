@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Mixtape Revival{% endblock %}
+
+{% block content %}
+<div class="text-center py-5">
+    <h1 class="display-4 fw-bold">Mixtape Revival</h1>
+    <p class="lead text-muted mb-5">
+        Digitale mixtapes — met liefde gemaakt, met liefde gedeeld.
+    </p>
+
+    {% if current_user.is_authenticated %}
+    <a href="/admin" class="btn btn-primary btn-lg mb-5">
+        <i class="bi bi-gear"></i> Ga naar Admin
+    </a>
+    {% else %}
+    <p class="mb-5">
+        <a href="/login" class="btn btn-outline-secondary">Inloggen als admin</a>
+    </p>
+    {% endif %}
+</div>
+
+{% if mixtapes %}
+<h2 class="mb-4">
+    {% if mixtapes|length == 1 %}
+        Er is {{ mixtapes|length }} mixtape beschikbaar
+    {% else %}
+        {{ mixtapes|length }} mixtapes beschikbaar
+    {% endif %}
+</h2>
+
+<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 row-cols-xl-4 g-4">
+    {% for m in mixtapes %}
+    <div class="col">
+        <a href="/mixtape/{{ m.title }}" class="text-decoration-none">
+            <div class="card h-100 shadow-sm hover-shadow transition">
+                {% if m.cover %}
+                <img src="/covers/{{ m.title }}.jpg" class="card-img-top" style="height:200px; object-fit:cover;">
+                {% else %}
+                <div class="bg-gradient text-white d-flex align-items-center justify-content-center" style="height:200px;">
+                    <i class="bi bi-music-note-beamed display-3"></i>
+                </div>
+                {% endif %}
+                <div class="card-body">
+                    <h5 class="card-title text-dark mb-1">{{ m.title }}</h5>
+                    <p class="card-text text-muted small">
+                        {{ m.tracks|length }} tracks • {{ m.created[:10] }}
+                    </p>
+                </div>
+            </div>
+        </a>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="text-center py-5">
+    <i class="bi bi-cassette display-1 text-muted"></i>
+    <h3 class="mt-4 text-muted">Nog geen mixtapes...</h3>
+    <p>Log in als admin en maak de eerste aan!</p>
+</div>
+{% endif %}
+{% endblock %}
