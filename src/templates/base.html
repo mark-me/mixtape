@@ -1,5 +1,26 @@
 <!DOCTYPE html>
 <html lang="nl" data-bs-theme="light">
+<style>
+    .jsfe-folder > .jsfe-name::before {
+        content: "📁 ";
+    }
+    .jsfe-file > .jsfe-name::before {
+        content: "🎵 ";
+    }
+    .jsfe-has-thumb > .jsfe-name {
+        padding-left: 4px !important;
+    }
+    .jsfe-has-thumb > .jsfe-name::before {
+        content: "";
+        display: inline-block;
+        width: 32px;
+        height: 32px;
+        background: var(--bs-body-bg) center/contain no-repeat;
+        margin-right: 8px;
+        border-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+</style>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">

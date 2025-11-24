@@ -1,26 +1,29 @@
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import mutagen
 from flask import (
     Flask,
+    Response,
+    flash,
+    jsonify,
+    redirect,
     render_template,
     request,
-    redirect,
-    url_for,
-    flash,
     send_from_directory,
-    jsonify,
-    Response,
+    url_for,
 )
 from flask_login import (
     LoginManager,
     UserMixin,
-    login_user,
-    login_required,
-    logout_user,
     current_user,
+    login_required,
+    login_user,
+    logout_user,
 )
-import os
-import json
-import datetime
-import mutagen
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -50,10 +53,12 @@ ADMIN_PASSWORD = "password"
 MIXTAPE_DIR = "mixtapes"
 MUSIC_DIR = "music"
 COVER_DIR = "covers"
+THUMBNAIL_CACHE = "thumbnail_cache"
 
 os.makedirs(MIXTAPE_DIR, exist_ok=True)
 os.makedirs(MUSIC_DIR, exist_ok=True)
 os.makedirs(COVER_DIR, exist_ok=True)
+os.makedirs(THUMBNAIL_CACHE, exist_ok=True)
 
 
 # Helper om mixtapes te laden
@@ -72,6 +77,35 @@ def load_mixtapes(sort_by="alpha"):
     elif sort_by == "modified":
         mixtapes.sort(key=lambda x: x.get("modified", x["created"]), reverse=True)
     return mixtapes
+
+
+def get_album_art(album_path: Path):
+    """Extract embedded artwork or look for cover.jpg/folder.jpg"""
+    covers = [
+        "cover.jpg",
+        "cover.png",
+        "folder.jpg",
+        "folder.png",
+        "front.jpg",
+        "albumart.jpg",
+    ]
+    for cover in covers:
+        p = album_path / cover
+        if p.exists():
+            return str(p)
+
+    # Try to extract from first audio file
+    for audio_file in album_path.glob("*.*"):
+        if audio_file.suffix.lower() in {".mp3", ".flac", ".m4a", ".ogg"}:
+            try:
+                audio = mutagen.File(audio_file)
+                if hasattr(audio, "pictures") and audio.pictures:
+                    return audio.pictures[0].data
+                elif audio.get("APIC:"):
+                    return audio["APIC:"].data
+            except:
+                continue
+    return None
 
 
 @app.route("/")
@@ -212,6 +246,22 @@ def edit_mixtape(title):
 
     if request.method == "POST":
         action = request.form.get("action")
+        if request.content_type == "application/json":
+            data_json = request.get_json()
+            if data_json.get("action") == "add_tracks":
+                tracks = data_json.get("tracks", [])
+                added = 0
+                for track in tracks:
+                    full_path = os.path.join(MUSIC_DIR, track.replace("/", os.sep))
+                    if os.path.exists(full_path) and full_path not in data["tracks"]:
+                        data["tracks"].append(full_path)
+                        added += 1
+                if added:
+                    data["modified"] = datetime.datetime.now().isoformat()
+                    with open(path, "w") as f:
+                        json.dump(data, f, indent=2)
+                    return jsonify(success=True, added=added)
+                return jsonify(success=False)
 
         if action == "update_title":
             new_title = request.form["title"].strip()
@@ -309,6 +359,102 @@ def add_tracks(title):
     with open(path, "w") as f:
         json.dump(data, f)
     return redirect(url_for("admin"))
+
+
+@app.route("/album_thumb/<path:album_path>")
+def album_thumb(album_path):
+    album_dir = Path(MUSIC_DIR) / album_path.replace("|", "/")
+    if not album_dir.is_dir():
+        return "", 404
+
+    cache_key = hashlib.md5(str(album_dir).encode()).hexdigest()
+    cache_file = Path(THUMBNAIL_CACHE) / f"{cache_key}.jpg"
+
+    # Serve from cache if exists and recent
+    if (
+        cache_file.exists()
+        and (
+            datetime.datetime.now()
+            - datetime.datetime.fromtimestamp(cache_file.stat().st_mtime)
+        ).days
+        < 7
+    ):
+        return send_from_directory(THUMBNAIL_CACHE, cache_file.name)
+
+    art = get_album_art(album_dir)
+    if not art:
+        return "", 204  # No art → transparent response
+
+    if isinstance(art, (bytes, bytearray)):
+        img_data = art
+    else:
+        img_data = Path(art).read_bytes()
+
+    # Resize & cache
+    from io import BytesIO
+    from PIL import Image
+
+    img = Image.open(BytesIO(img_data))
+    img.thumbnail((80, 80))
+    output = BytesIO()
+    img.save(output, format="JPEG", quality=85)
+    img_bytes = output.getvalue()
+
+    # Save to cache
+    with open(cache_file, "wb") as f:
+        f.write(img_bytes)
+
+    return Response(img_bytes, mimetype="image/jpeg")
+
+
+@app.route("/library_tree")
+def library_tree():
+    root = Path(MUSIC_DIR)
+    result = []
+
+    def build_node(path: Path, relative=""):
+        if path.is_file():
+            if path.suffix.lower() in {".mp3", ".flac", ".ogg", ".oga", ".m4a"}:
+                return {
+                    "name": path.name,
+                    "path": str(path.relative_to(root)).replace("\\", "/"),
+                    "isFile": True,
+                }
+            return None
+
+        node = {
+            "name": path.name,
+            "path": str(path.relative_to(root)).replace("\\", "/") if relative else "",
+            "isFile": False,
+            "children": [],
+        }
+
+        for child in sorted(
+            path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
+        ):
+            child_node = build_node(child)
+            if child_node:
+                node["children"].append(child_node)
+
+        # Only include folders that have audio files somewhere inside
+        if not node["children"] and not any(
+            p.is_file()
+            for p in path.rglob("*.*")
+            if p.suffix.lower() in {".mp3", ".flac", ".ogg", ".oga", ".m4a"}
+        ):
+            return None
+
+        return node
+
+    tree = {"name": "music", "isFile": False, "children": []}
+
+    for item in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if item.is_dir():
+            node = build_node(item)
+            if node:
+                tree["children"].append(node)
+
+    return jsonify(tree["children"])
 
 
 @app.route("/reorder_tracks/<title>", methods=["POST"])

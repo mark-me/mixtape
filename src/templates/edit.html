@@ -54,27 +54,28 @@
 
         <!-- Tracks toevoegen -->
         <div class="card mb-4">
-            <div class="card-header">Tracks toevoegen uit bibliotheek</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Tracks toevoegen uit bibliotheek</span>
+                <small class="text-muted" id="trackCounter">0 tracks gevonden</small>
+            </div>
             <div class="card-body">
-                <form method="post">
-                    <input type="hidden" name="action" value="add_tracks">
-                    <div class="row">
-                        <div class="col-12">
-                            <select name="new_tracks" multiple class="form-select" size="8">
-                                {% for track in available_tracks %}
-                                {% set fullpath = 'music/' + track %}
-                                {% if fullpath not in mixtape.tracks %}
-                                <option value="{{ track }}">{{ track }}</option>
-                                {% endif %}
-                                {% endfor %}
-                            </select>
-                            <small class="text-muted">Houd Ctrl/Cmd ingedrukt voor meerdere selecties</small>
-                        </div>
+                <!-- Search box -->
+                <div class="mb-3">
+                    <input type="text" id="librarySearch" class="form-control" placeholder="Zoek in je hele bibliotheek... (bijv. radiohead karma)" autofocus>
+                </div>
+
+                <!-- The tree container -->
+                <div id="musicTree" style="max-height: 520px; overflow-y: auto; border: 1px solid var(--bs-border-color); border-radius: 8px; padding: 8px; background: var(--bs-body-bg);">
+                    <div class="text-center py-5 text-muted">
+                        <i class="bi bi-hourglass-split"></i> Laden van bibliotheek...
                     </div>
-                    <button type="submit" class="btn btn-success mt-3">
-                        <i class="bi bi-plus-circle"></i> Tracks toevoegen
-                    </button>
-                </form>
+                </div>
+
+                <!-- Add button -->
+                <button id="addSelectedTracks" class="btn btn-success mt-3" disabled>
+                    <i class="bi bi-plus-circle"></i>
+                    <span>Toevoegen (<span id="selectedCount">0</span>)</span>
+                </button>
             </div>
         </div>
     </div>
@@ -111,6 +112,51 @@
 </div>
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/js-file-explorer@1.2.0/dist/js-file-explorer.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/js-file-explorer@1.2.0/dist/js-file-explorer.min.css" rel="stylesheet">
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const treeEl = document.getElementById('musicTree');
+    const searchInput = document.getElementById('librarySearch');
+    const addBtn = document.getElementById('addSelectedTracks');
+    const selectedCountEl = document.getElementById('selectedCount');
+    const trackCounter = document.getElementById('trackCounter');
+
+    // Initialize the tree
+    new JsFileExplorer(treeEl, {
+        url: '/library_tree',           // We'll create this endpoint
+        multiSelect: true,
+        showFiles: true,
+        showFolders: true,
+        checkbox: true,
+        search: true,
+        searchPlaceholder: 'Zoek in bibliotheek...',
+        onSelectionChange: (selected) => {
+            const tracks = selected.filter(f => f.isFile);
+            selectedCountEl.textContent = tracks.length;
+            addBtn.disabled = tracks.length === 0;
+            trackCounter.textContent = `${selected.length} geselecteerd`;
+        }
+    });
+
+    // Add selected tracks
+    addBtn.addEventListener('click', () => {
+        const explorer = treeEl.querySelector('.jsfe')._jsFileExplorer;
+        const selectedFiles = explorer.getSelectedFiles();
+        const paths = selectedFiles.map(f => f.path);
+
+        fetch('', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'add_tracks',
+                tracks: paths
+            })
+        }).then(r => r.ok ? location.reload() : alert('Fout bij toevoegen'));
+    });
+});
+</script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script>
 Sortable.create(document.getElementById('currentTracks'), {
