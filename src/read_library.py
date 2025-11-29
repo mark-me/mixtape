@@ -2,23 +2,24 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sqlite3
 import time
 from pathlib import Path
 from tinytag import TinyTag
 from whoosh.index import create_in, open_dir, exists_in
 from whoosh.fields import Schema, TEXT, ID
 from whoosh.qparser import MultifieldParser, FuzzyTermPlugin
-
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# ==================== CONFIG ====================
-MUSIC_ROOT = Path("/home/mark/Music")          # WIJZIG DIT
-INDEX_DIR  = Path("./music_index")
+# ===================== CONFIG =====================
+MUSIC_ROOT = Path("/home/mark/Music")  # WIJZIG DIT
+INDEX_DIR = Path("./music_index")
+DB_PATH = Path("./music.db")
 
 EXTENSIONS = {".mp3", ".flac", ".ogg", ".oga", ".m4a", ".mp4", ".wav", ".wma"}
 
-# ==================== SCHEMA ====================
+# ===================== SCHEMA =====================
 schema = Schema(
     path=ID(stored=True, unique=True),
     artist=TEXT(stored=True, phrase=False),
@@ -26,260 +27,284 @@ schema = Schema(
     title=TEXT(stored=True, phrase=False),
 )
 
-def get_tags(filepath: Path):
-    """Extracts and returns the artist, album, and title tags from an audio file.
 
-    This function reads metadata from the given file and provides fallback values based on the file path if tags are missing.
+# ===================== SQLite helpers =====================
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    Args:
-        filepath (Path): The path to the audio file.
 
-    Returns:
-        tuple: A tuple containing the artist, album, and title as lowercase strings.
-    """
+def init_db():
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tracks (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            path          TEXT UNIQUE NOT NULL,
+            filename      TEXT,
+            artist        TEXT,
+            album         TEXT,
+            title         TEXT,
+            albumartist   TEXT,
+            genre         TEXT,
+            year          INTEGER,
+            track         INTEGER,
+            duration      REAL,
+            bitrate       REAL,
+            filesize      INTEGER,
+            last_modified REAL,
+            date_added    REAL DEFAULT (strftime('%s','now'))
+        )
+    """)
+    for idx in ["path", "artist", "album", "title"]:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{idx} ON tracks({idx})")
+    conn.commit()
+    conn.close()
+
+
+def get_metadata(filepath: Path) -> dict:
     try:
-        tag = TinyTag.get(filepath, tags=True, duration=False, image=False)
-    except Exception:
+        tag = TinyTag.get(filepath, tags=True, duration=True, image=False)
+    except:
         tag = None
-    artist = (tag.artist or tag.albumartist or "").strip() or filepath.parent.parent.name
-    album = (tag.album or "").strip() or filepath.parent.name
+
+    stat = filepath.stat()
+    artist = (
+        tag.artist or tag.albumartist or filepath.parent.parent.name or "Unknown Artist"
+    ).strip()
+    album = (tag.album or filepath.parent.name or "Unknown Album").strip()
     title = (tag.title or filepath.stem).strip()
-    return artist.lower(), album.lower(), title.lower()
 
-# ==================== INDEX FUNCTIES ====================
-def build_initial_index():
-    """Builds a new search index for the entire music library.
+    return {
+        "path": str(filepath),
+        "filename": filepath.name,
+        "artist": artist,
+        "album": album,
+        "title": title,
+        "albumartist": tag.albumartist if tag else None,
+        "genre": tag.genre if tag else None,
+        "year": tag.year if tag else None,
+        "track": tag.track if tag else None,
+        "duration": tag.duration if tag else 0,
+        "bitrate": tag.bitrate if tag else 0,
+        "filesize": stat.st_size,
+        "last_modified": stat.st_mtime,
+    }
 
-    This function scans all supported audio files in the music root directory, extracts their tags, and creates a new Whoosh index.
 
-    Returns:
-        whoosh.index.Index: The newly created Whoosh index object.
-    """
-    print("Eerste volledige scan en indexering...")
+# ===================== Index opbouwen =====================
+def build_indexes():
+    print("Volledige indexering (Whoosh + SQLite)...")
     if INDEX_DIR.exists():
         import shutil
+
         shutil.rmtree(INDEX_DIR)
-    os.makedirs(INDEX_DIR)
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
     ix = create_in(INDEX_DIR, schema)
     writer = ix.writer()
 
+    conn = get_db_connection()
+    conn.execute("DELETE FROM tracks")
     count = 0
-    for file_path in MUSIC_ROOT.rglob("*"):
-        if file_path.suffix.lower() in EXTENSIONS and file_path.is_file():
-            artist, album, title = get_tags(file_path)
+
+    for filepath in MUSIC_ROOT.rglob("*"):
+        if filepath.suffix.lower() in EXTENSIONS and filepath.is_file():
+            data = get_metadata(filepath)
+
+            # Whoosh
             writer.add_document(
-                path=str(file_path),
-                artist=artist,
-                album=album,
-                title=title,
+                path=data["path"],
+                artist=data["artist"].lower(),
+                album=data["album"].lower(),
+                title=data["title"].lower(),
             )
+
+            # SQLite
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO tracks
+                (path,filename,artist,album,title,albumartist,genre,year,track,duration,bitrate,filesize,last_modified)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+                (
+                    data["path"],
+                    data["filename"],
+                    data["artist"],
+                    data["album"],
+                    data["title"],
+                    data["albumartist"],
+                    data["genre"],
+                    data["year"],
+                    data["track"],
+                    data["duration"],
+                    data["bitrate"],
+                    data["filesize"],
+                    data["last_modified"],
+                ),
+            )
+
             count += 1
-            if count % 1000 == 0:
-                print(f"  {count} bestanden...")
+            if count % 2000 == 0:
+                print(f"  → {count} tracks...")
+                conn.commit()
 
     writer.commit()
-    print(f"Volledige index gebouwd: {count} tracks\n")
-    return ix
+    conn.commit()
+    conn.close()
+    print(f"Klaar! {count} tracks geïndexeerd.\n")
+
 
 def get_index():
-    """Returns the Whoosh index for the music library, creating it if necessary.
-
-    This function loads the existing index from disk or builds a new one if it does not exist.
-
-    Returns:
-        whoosh.index.Index: The Whoosh index object for the music library.
-    """
+    init_db()
     if not INDEX_DIR.exists() or not exists_in(INDEX_DIR):
-        return build_initial_index()
-    print("Bestaande index geladen.\n")
+        build_indexes()
+    else:
+        print("Bestaande indexen geladen.\n")
     return open_dir(INDEX_DIR)
 
-# ==================== ZOEKEN ====================
-def search(query_str: str, limit: int = 100, fuzziness: int = None):
-    """Searches the music index for tracks matching the query string.
 
-    This function performs a search across artist, album, and title fields, optionally using fuzzy matching, and returns a list of matching tracks with their metadata.
-
-    Args:
-        query_str (str): The search query string.
-        limit (int, optional): The maximum number of results to return. Defaults to 100.
-        fuzziness (int, optional): The fuzziness level for fuzzy searching. Defaults to None.
-
-    Returns:
-        list: A list of dictionaries containing artist, album, title, and path for each matching track.
-    """
+# ===================== ZOEKEN (nu correct!) =====================
+def search(query: str, limit: int = 100):
     ix = open_dir(INDEX_DIR)
     with ix.searcher() as searcher:
         parser = MultifieldParser(["artist", "album", "title"], ix.schema)
         parser.add_plugin(FuzzyTermPlugin())
-        if fuzziness is not None:
-            query = parser.parse(f"{query_str}~{fuzziness}")
-        else:
-            query = parser.parse(query_str)
+        q = parser.parse(query.strip() + "~1")
 
-        results = searcher.search(query, limit=limit), #sortedby="score")
+        results = searcher.search(q, limit=limit)
+
         hits = []
+        conn = get_db_connection()
         for hit in results:
-            try:
-                tag = TinyTag.get(hit['path'])
-                artist = tag.artist or tag.albumartist or Path(hit['path']).parent.parent.name
-                album  = tag.album or Path(hit['path']).parent.name
-                title  = tag.title or Path(hit['path']).stem
-            except Exception:
-                artist = hit['artist'].title()
-                album  = hit['album'].title()
-                title  = hit['title'].title()
-
-            hits.append({
-                "artist": artist,
-                "album":  album,
-                "title":  title,
-                "path":   hit['path'],
-            })
+            row = conn.execute(
+                "SELECT artist, album, title, path FROM tracks WHERE path = ?",
+                (hit["path"],),
+            ).fetchone()
+            if row:
+                hits.append(dict(row))
+        conn.close()
         return hits
 
-# ==================== WATCHDOG HANDLER ====================
-class MusicWatcher(FileSystemEventHandler):
-    """Handles file system events for the music library and updates the search index.
 
-    This class listens for file creation, modification, movement, and deletion events, and updates the music index accordingly.
-    """
+# ===================== Watchdog handler =====================
+class MusicHandler(FileSystemEventHandler):
+    def __init__(self, ix):
+        self.ix = ix
 
-    def __init__(self, index):
-        """Initializes the MusicHandler with a reference to the search index.
+    def _update_file(self, path_str: str):
+        p = Path(path_str)
+        if p.suffix.lower() not in EXTENSIONS or not p.is_file():
+            return
+        return p
 
-        Args:
-            index: The Whoosh index object to update in response to file system events.
-        """
-        self.ix = index
+    def process(self, path_str: str):
+        p = self._update_file(path_str)
+        if not p:
+            return
+
+        data = get_metadata(p)
+
+        # Whoosh update
+        writer = self.ix.writer()
+        writer.delete_by_term("path", data["path"])
+        writer.add_document(
+            path=data["path"],
+            artist=data["artist"].lower(),
+            album=data["album"].lower(),
+            title=data["title"].lower(),
+        )
+        writer.commit()
+
+        # SQLite update
+        conn = get_db_connection()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO tracks
+            (path,filename,artist,album,title,albumartist,genre,year,track,duration,bitrate,filesize,last_modified)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+            (
+                data["path"],
+                data["filename"],
+                data["artist"],
+                data["album"],
+                data["title"],
+                data["albumartist"],
+                data["genre"],
+                data["year"],
+                data["track"],
+                data["duration"],
+                data["bitrate"],
+                data["filesize"],
+                data["last_modified"],
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        print(f"Updated: {data['artist']} – {data['title']}")
 
     def on_created(self, event):
-        """Handles file creation events and updates the music index.
-
-        This method is called when a new file is created in the monitored directory and adds it to the search index if it is a supported audio file.
-
-        Args:
-            event: The file system event object describing the creation.
-        """
-        if event.is_directory:
-            return
         self.process(event.src_path)
 
     def on_modified(self, event):
-        """Handles file modification events and updates the music index.
-
-        This method is called when a file is modified in the monitored directory and updates the search index if it is a supported audio file.
-
-        Args:
-            event: The file system event object describing the modification.
-        """
-        if event.is_directory:
-            return
         self.process(event.src_path)
 
     def on_moved(self, event):
-        """Handles file move events and updates the music index.
-
-        This method is called when a file is moved or renamed in the monitored directory.
-        It removes the old entry from the search index and adds or updates the new one if it is a supported audio file.
-
-        Args:
-            event: The file system event object describing the move.
-        """
-        if event.is_directory:
-            return
-        # Verwijder oude, voeg nieuwe toe
-        if Path(event.src_path).suffix.lower() in EXTENSIONS:
-            self.delete_from_index(event.src_path)
+        if self._update_file(event.src_path):
+            # verwijder oude entry
+            conn = get_db_connection()
+            conn.execute("DELETE FROM tracks WHERE path = ?", (event.src_path,))
+            conn.commit()
+            conn.close()
+            self.ix.writer().delete_by_term("path", event.src_path)
+            self.ix.writer().commit()
         self.process(event.dest_path)
 
     def on_deleted(self, event):
-        """Handles file deletion events and updates the music index.
+        p = event.src_path
+        conn = get_db_connection()
+        conn.execute("DELETE FROM tracks WHERE path = ?", (p,))
+        conn.commit()
+        conn.close()
+        self.ix.writer().delete_by_term("path", p)
+        self.ix.writer().commit()
 
-        This method is called when a file is deleted in the monitored directory and removes it from the search index if it is a supported audio file.
 
-        Args:
-            event: The file system event object describing the deletion.
-        """
-        if event.is_directory:
-            return
-        self.delete_from_index(event.src_path)
-
-    def process(self, path_str: str):
-        """Indexes or updates a single audio file in the music index.
-
-        This method extracts tags from the given file and updates the search index, replacing any previous entry for the same path.
-
-        Args:
-            path_str (str): The path to the audio file to process.
-        """
-        path = Path(path_str)
-        if path.suffix.lower() not in EXTENSIONS or not path.is_file():
-            return
-
-        artist, album, title = get_tags(path)
-
-        writer = self.ix.writer()
-        # Verwijder eventueel oude versie (bij rename / tag change )
-        writer.delete_by_term('path', str(path))
-        writer.add_document(path=str(path), artist=artist, album=album, title=title)
-        writer.commit()
-        print(f"Indexed/Updated: {artist} – {title}")
-
-    def delete_from_index(self, path_str: str):
-        """Removes a file from the music index if it exists.
-
-        This method deletes the entry for the given file path from the search index if it is a supported audio file.
-
-        Args:
-            path_str (str): The path to the audio file to remove from the index.
-        """
-        path = Path(path_str)
-        if path.suffix.lower() not in EXTENSIONS:
-            return
-        writer = self.ix.writer()
-        deleted = writer.delete_by_term('path', str(path))
-        writer.commit()
-        if deleted:
-            print(f"Deleted from index: {path_str}")
-
-# ==================== MAIN ====================
+# ===================== Main =====================
 def main():
     ix = get_index()
 
-    # Start de live watcher
-    event_handler = MusicWatcher(ix)
     observer = Observer()
-    observer.schedule(event_handler, str(MUSIC_ROOT), recursive=True)
+    observer.schedule(MusicHandler(ix), str(MUSIC_ROOT), recursive=True)
     observer.start()
-    print(f"Live monitoring gestart op {MUSIC_ROOT}")
-    print("Typ je zoekterm (of 'quit' om te stoppen):\n")
+    print(f"Watching {MUSIC_ROOT}")
+    print("Typ een zoekterm (of 'quit' om te stoppen):\n")
 
     try:
         while True:
-            query = input("> ").strip()
-            if query.lower() in {"quit", "exit", "q"}:
+            q = input("> ").strip()
+            if q.lower() in {"quit", "exit", "q"}:
                 break
-            if not query:
+            if not q:
                 continue
 
-            start = time.time()
-            results = search(query)
-            took = time.time() - start
-
-            print(f"\n{len(results)} resultaten in {took:.3f}s:\n")
+            t0 = time.time()
+            results = search(q)
+            print(f"\n{len(results)} resultaten in {time.time() - t0:.3f}s\n")
             for r in results[:50]:
-                print(f"{r['artist']} ─ {r['album']} ─ {r['title']}")
+                print(f"{r['artist']} — {r['album']} — {r['title']}")
             if len(results) > 50:
-                print(f"... en {len(results)-50} meer")
+                print(f"   … en nog {len(results) - 50} meer")
             print()
     except KeyboardInterrupt:
         pass
     finally:
         observer.stop()
         observer.join()
-        print("\nTot ziens!")
+        print("\nAfgesloten.")
+
 
 if __name__ == "__main__":
     main()
