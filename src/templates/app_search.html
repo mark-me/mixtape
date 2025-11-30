@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Muziek Zoeken</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Meine Muziekverzameling</h1>
+        <input type="text" id="search" placeholder="Typ om te zoeken (fuzzy)..." autofocus autocomplete="off">
+        <div id="status">Laden index...</div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const searchInput = document.getElementById('search');
+        const resultsDiv = document.getElementById('results');
+        const statusDiv = document.getElementById('status');
+        let debounceTimer;
+
+        searchInput.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            const q = searchInput.value.trim();
+            if (q.length < 2) {
+                resultsDiv.innerHTML = '';
+                statusDiv.textContent = q ? 'Typ minimaal 2 tekens...' : '';
+                return;
+            }
+
+            statusDiv.textContent = 'Zoeken...';
+
+            debounceTimer = setTimeout(() => {
+                fetch(`/search?q=${encodeURIComponent(q)}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        statusDiv.textContent = `${data.count} resultaten in ${data.time}s`;
+                        resultsDiv.innerHTML = data.results.map(track => `
+                            <div class="track">
+                                <strong>${escapeHtml(track.artist)}</strong> —
+                                <em>${escapeHtml(track.album)}</em> —
+                                ${escapeHtml(track.title)}
+                                <span class="path">${escapeHtml(track.path)}</span>
+                            </div>
+                        `).join('');
+                    });
+            }, 300);
+        });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initial message
+        setTimeout(() => {
+            if (!searchInput.value) statusDiv.textContent = 'Index klaar — begin met typen!';
+        }, 2000);
+    </script>
+</body>
+</html>
