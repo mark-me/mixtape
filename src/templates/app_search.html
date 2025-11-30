@@ -8,57 +8,117 @@
 </head>
 <body>
     <div class="container">
-        <h1>Meine Muziekverzameling</h1>
+        <h1>Mijn Muziekverzameling</h1>
         <input type="text" id="search" placeholder="Typ om te zoeken (fuzzy)..." autofocus autocomplete="off">
         <div id="status">Laden index...</div>
 
-        <div id="results"></div>
+        <div id="results">
+            <div id="groups">
+                <div class="section" id="artists-section">
+                    <h2>Artists <span class="count"></span></h2>
+                    <div class="grid" id="artists-grid"></div>
+                </div>
+
+                <div class="section" id="albums-section">
+                    <h2>Albums <span class="count"></span></h2>
+                    <div class="grid" id="albums-grid"></div>
+                </div>
+
+                <div class="section" id="tracks-section">
+                    <h2>Tracks <span class="count"></span></h2>
+                    <div id="tracks-list"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <script>
-        const searchInput = document.getElementById('search');
-        const resultsDiv = document.getElementById('results');
-        const statusDiv = document.getElementById('status');
-        let debounceTimer;
+<script>
+    const searchInput = document.getElementById('search');
+    const statusDiv = document.getElementById('status');
 
-        searchInput.addEventListener('input', () => {
-            clearTimeout(debounceTimer);
-            const q = searchInput.value.trim();
-            if (q.length < 2) {
-                resultsDiv.innerHTML = '';
-                statusDiv.textContent = q ? 'Typ minimaal 2 tekens...' : '';
-                return;
-            }
+    const artistsGrid = document.getElementById('artists-grid');
+    const albumsGrid = document.getElementById('albums-grid');
+    const tracksList = document.getElementById('tracks-list');
 
-            statusDiv.textContent = 'Zoeken...';
+    let debounceTimer;
 
-            debounceTimer = setTimeout(() => {
-                fetch(`/search?q=${encodeURIComponent(q)}`)
-                    .then(r => r.json())
-                    .then(data => {
-                        statusDiv.textContent = `${data.count} resultaten in ${data.time}s`;
-                        resultsDiv.innerHTML = data.results.map(track => `
-                            <div class="track">
-                                <strong>${escapeHtml(track.artist)}</strong> —
-                                <em>${escapeHtml(track.album)}</em> —
-                                ${escapeHtml(track.title)}
-                                <span class="path">${escapeHtml(track.path)}</span>
-                            </div>
-                        `).join('');
-                    });
-            }, 300);
-        });
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+    function renderResults(data) {
+        // Artists
+        document.querySelector('#artists-section .count').textContent = `(${data.artists.length})`;
+        artistsGrid.innerHTML = data.artists.map(a => `
+            <div class="card artist-card" title="Found in ${a.track_count} tracks">
+                <div class="card-title">${escapeHtml(a.name)}</div>
+                <div class="card-subtitle">${a.track_count} matching tracks</div>
+                <div class="samples">
+                    ${a.sample_tracks.map(t => `<span>${escapeHtml(t)}</span>`).join(' · ')}
+                </div>
+            </div>
+        `).join('');
+
+        // Albums
+        document.querySelector('#albums-section .count').textContent = `(${data.albums.length})`;
+        albumsGrid.innerHTML = data.albums.map(al => `
+            <div class="card album-card" title="${al.track_count} matching tracks">
+                <div class="card-title">${escapeHtml(al.name || "Unknown Album")}</div>
+                <div class="card-subtitle">${escapeHtml(al.artist)}</div>
+                <div class="samples">
+                    ${al.sample_tracks.map(t => `<span>${escapeHtml(t)}</span>`).join(' · ')}
+                </div>
+            </div>
+        `).join('');
+
+        // Tracks
+        document.querySelector('#tracks-section .count').textContent = `(${data.tracks.length}${data.total_tracks > data.tracks.length ? '+' : ''})`;
+        tracksList.innerHTML = data.tracks.map(track => `
+            <div class="track">
+                <strong>${escapeHtml(track.artist)}</strong> —
+                <em>${escapeHtml(track.album)}</em> —
+                ${escapeHtml(track.title)}
+                <span class="path">${escapeHtml(Path(track.path).parent.name)}/${escapeHtml(track.path.split('/')[-1])}</span>
+            </div>
+        `).join('');
+    }
+
+    searchInput.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        const q = searchInput.value.trim();
+
+        if (q.length < 2) {
+            document.getElementById('results').style.display = 'none';
+            statusDiv.textContent = q ? 'Typ minimaal 2 tekens...' : '';
+            return;
         }
 
-        // Initial message
-        setTimeout(() => {
-            if (!searchInput.value) statusDiv.textContent = 'Index klaar — begin met typen!';
-        }, 2000);
-    </script>
+        document.getElementById('results').style.display = 'block';
+        statusDiv.textContent = 'Zoeken...';
+
+        debounceTimer = setTimeout(() => {
+            fetch(`/search?q=${encodeURIComponent(q)}`)
+                .then(r => r.json())
+                .then(data => {
+                    renderResults(data);
+                    statusDiv.textContent = `${data.total_tracks} tracks gevonden in ${data.time}s`;
+                })
+                .catch(err => {
+                    statusDiv.textContent = 'Fout bij zoeken';
+                    console.error(err);
+                });
+        }, 300);
+    });
+
+    // Auto-focus and initial message
+    searchInput.focus();
+    setTimeout(() => {
+        if (!searchInput.value) {
+            statusDiv.textContent = 'Index klaar — begin met typen!';
+        }
+    }, 1000);
+</script>
 </body>
 </html>

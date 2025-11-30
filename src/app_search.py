@@ -16,7 +16,8 @@ MUSIC_ROOT = Path("/home/mark/Music")  # ← CHANGE THIS TO YOUR MUSIC FOLDER
 DB_PATH = Path(__file__).parent
 # ====================================================
 
-app = Flask(__name__)
+# Global collection instance - initialize early (before Flask app)
+collection = None
 
 class MusicCollection:
     def __init__(self, path_music: Path, path_db: Path):
@@ -69,12 +70,13 @@ class MusicCollection:
         conn.execute("DELETE FROM tracks")
 
         count = 0
-        for filepath in self.path_music.rglob("*.*"):
+        for filepath in self.path_music.rglob("*"):
             if filepath.is_file() and filepath.suffix.lower() in self.supporter_extensions:
                 self._index_single_track(writer, conn, filepath)
                 count += 1
                 if count % 1000 == 0:
                     print(f"   Indexed {count} tracks...")
+                    writer.commit()  # Commit Whoosh more frequently to avoid memory issues
                     conn.commit()
 
         writer.commit()
@@ -86,16 +88,16 @@ class MusicCollection:
         import shutil
         if self.path_index.exists():
             shutil.rmtree(self.path_index)
-        self.path_index.mkdir(parents=True)
+        self.path_index.mkdir(parents=True, exist_ok=True)
 
     def _index_single_track(self, writer, conn, filepath: Path):
         try:
             tag = TinyTag.get(filepath, tags=True, duration=True)
-        except:
+        except Exception:
             tag = None
 
-        artist = (tag.artist or tag.albumartist or filepath.parent.parent.name or "Unknown").strip()
-        album = (tag.album or filepath.parent.name or "Unknown").strip()
+        artist = (tag.artist or tag.albumartist or str(filepath.parent.parent.name) or "Unknown").strip()
+        album = (tag.album or str(filepath.parent.name) or "Unknown").strip()
         title = (tag.title or filepath.stem).strip()
 
         writer.add_document(
@@ -115,61 +117,66 @@ class MusicCollection:
             artist,
             album,
             title,
-            getattr(tag, 'albumartist', None),
-            getattr(tag, 'genre', None),
-            tag.year if tag else None,
-            tag.duration if tag else None,
+            getattr(tag, 'albumartist', None) if tag else None,
+            getattr(tag, 'genre', None) if tag else None,
+            getattr(tag, 'year', None) if tag else None,
+            getattr(tag, 'duration', None) if tag else None,
         ))
 
     def ensure_index(self):
-        with self._lock:
-            self.init_db()
-            if not self.path_music.exists():
-                raise FileNotFoundError(f"Music folder not found: {self.path_music}")
+        self.init_db()
+        if not self.path_music.exists():
+            raise FileNotFoundError(f"Music folder not found: {self.path_music}")
 
-            need_reindex = not exists_in(self.path_index)
-            if not need_reindex:
-                conn = self.get_db_connection()
-                count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
-                conn.close()
-                need_reindex = count == 0
+        need_reindex = not exists_in(self.path_index)
+        if not need_reindex:
+            conn = self.get_db_connection()
+            count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+            conn.close()
+            need_reindex = count == 0
 
-            if need_reindex:
-                print("No index found → building full index...")
-                self.build_indexes()
+        if need_reindex:
+            print("No index found → building full index...")
+            self.build_indexes()
 
-            self.ix = open_dir(self.path_index)
+        self.ix = open_dir(self.path_index)
 
     def search(self, query: str, limit: int = 200):
         if not query.strip():
             return []
 
+        results = self._whoosh_search(query, limit)
+        return self._collect_search_hits(results)
+
+    def _whoosh_search(self, query, limit):
         with self.ix.searcher() as searcher:
             parser = MultifieldParser(["artist", "album", "title"], self.ix.schema)
             parser.add_plugin(FuzzyTermPlugin())
             q = parser.parse(f"{query}~1")
+            return list(searcher.search(q, limit=limit))
 
-            results = searcher.search(q, limit=limit)
-            conn = self.get_db_connection()
-            hits = []
-            for hit in results:
-                if row := conn.execute(
-                    "SELECT artist, album, title, path FROM tracks WHERE path = ?",
-                    (hit['path'],),
-                ).fetchone():
-                    hits.append(dict(row))
-                else:
-                    hits.append({
-                        'artist': hit['artist'].title(),
-                        'album': hit['album'].title(),
-                        'title': hit['title'].title(),
-                        'path': hit['path']
-                    })
-            conn.close()
-            return hits
+    def _collect_search_hits(self, results):
+        conn = self.get_db_connection()
+        hits = []
+        for hit in results:
+            row = conn.execute(
+                "SELECT artist, album, title, path FROM tracks WHERE path = ?",
+                (hit['path'],)
+            ).fetchone()
+            if row:
+                hits.append(dict(row))
+            else:
+                hits.append({
+                    'artist': hit['artist'].title(),
+                    'album': hit['album'].title(),
+                    'title': hit['title'].title(),
+                    'path': hit['path']
+                })
+        conn.close()
+        return hits
 
     def start_watching(self):
-        if self.observer is not None:
+        if self.observer is not None and self.observer.is_alive():
             return
 
         class Watcher(FileSystemEventHandler):
@@ -206,26 +213,41 @@ class MusicCollection:
 
     def _update_single_file(self, filepath: Path):
         with self._lock:
-            writer = self.ix.writer()
-            conn = self.get_db_connection()
-            self._index_single_track(writer, conn, filepath)
-            writer.commit()
-            conn.commit()
-            conn.close()
+            try:
+                writer = self.ix.writer()
+                conn = self.get_db_connection()
+                self._index_single_track(writer, conn, filepath)
+                writer.commit()
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"Error updating {filepath}: {e}")
 
     def _delete_file(self, filepath: Path):
         with self._lock:
-            writer = self.ix.writer()
-            writer.delete_by_term('path', str(filepath))
-            writer.commit()
+            try:
+                writer = self.ix.writer()
+                writer.delete_by_term('path', str(filepath))
+                writer.commit()
 
-            conn = self.get_db_connection()
-            conn.execute("DELETE FROM tracks WHERE path = ?", (str(filepath),))
-            conn.commit()
-            conn.close()
+                conn = self.get_db_connection()
+                conn.execute("DELETE FROM tracks WHERE path = ?", (str(filepath),))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"Error deleting {filepath}: {e}")
 
-# Global collection instance
+# Initialize collection manually (runs on module import)
 collection = MusicCollection(MUSIC_ROOT, DB_PATH)
+try:
+    collection.ensure_index()
+    collection.start_watching()
+    print("MusicCollection initialized successfully!")
+except Exception as e:
+    print(f"Initialization error: {e}")
+
+# Now create Flask app
+app = Flask(__name__)
 
 @app.route("/")
 def index():
@@ -234,22 +256,72 @@ def index():
 @app.route("/search")
 def search():
     query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify({
+            "artists": [],
+            "albums": [],
+            "tracks": [],
+            "count": 0,
+            "time": 0
+        })
+
     start = time.time()
-    results = collection.search(query, limit=500)
+    raw_results = collection.search(query, limit=1000)  # Get more for good grouping
     duration = time.time() - start
+
+    # Group by artist and extract unique artists/albums
+    artists_seen = set()
+    albums_seen = set()
+    artist_matches = []
+    album_matches = []
+
+    for track in raw_results:
+        artist = track['artist']
+        album_key = (artist, track['album'])  # unique album = artist + album name
+
+        if artist not in artists_seen:
+            artists_seen.add(artist)
+            artist_matches.append({
+                "name": artist,
+                "track_count": 1,
+                "sample_tracks": [track['title']]
+            })
+        else:
+            # Update existing artist entry
+            for a in artist_matches:
+                if a['name'] == artist:
+                    a['track_count'] += 1
+                if len(a['sample_tracks']) < 3:
+                    a['sample_tracks'].append(track['title'])
+
+        if album_key not in albums_seen:
+            albums_seen.add(album_key)
+            album_matches.append({
+                "artist": artist,
+                "name": track['album'],
+                "track_count": 1,
+                "sample_tracks": [track['title']]
+            })
+        else:
+            for al in album_matches:
+                if al['artist'] == artist and al['name'] == track['album']:
+                    al['track_count'] += 1
+                    if len(al['sample_tracks']) < 3:
+                        al['sample_tracks'].append(track['title'])
+
+    # Sort artists/albums by relevance (number of matching tracks)
+    artist_matches.sort(key=lambda x: x['track_count'], reverse=True)
+    album_matches.sort(key=lambda x: x['track_count'], reverse=True)
+
     return jsonify({
-        "results": results,
-        "count": len(results),
+        "artists": artist_matches[:20],        # Top 20 artists
+        "albums": album_matches[:30],          # Top 30 albums
+        "tracks": raw_results[:200],           # Top 200 tracks
+        "total_tracks": len(raw_results),
+        "query": query,
         "time": round(duration, 3)
     })
 
-@app.before_first_request
-def startup():
-    def run():
-        collection.ensure_index()
-        collection.start_watching()
-    threading.Thread(target=run, daemon=True).start()
-
 if __name__ == "__main__":
-    # For development
+    # For development - app is already initialized
     app.run(debug=True, host="0.0.0.0", port=5000)
