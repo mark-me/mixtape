@@ -10,7 +10,7 @@ from watchdog.events import FileSystemEventHandler
 
 # ==================== CONFIG — WIJZIG ALLEEN DEZE ====================
 MUSIC_ROOT = Path("/home/mark/Music")  # ← ABSOLUTE pad naar je muziek!
-DB_PATH = Path(__file__).parent.parent
+DB_PATH = Path(__file__).parent.parent / "collection-data"
 # =====================================================================
 
 
