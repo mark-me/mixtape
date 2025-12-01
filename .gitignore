@@ -13,5 +13,4 @@ wheels/
 music_index
 covers
 mixtapes
-src/music.db
-music.db
+collection-data
