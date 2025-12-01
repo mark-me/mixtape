@@ -258,7 +258,9 @@ dependencies = [
     { name = "mkdocs-material" },
     { name = "mutagen" },
     { name = "pillow" },
+    { name = "python-json-logger" },
     { name = "tinytag" },
+    { name = "tqdm" },
     { name = "watchdog" },
     { name = "whoosh" },
 ]
@@ -271,7 +273,9 @@ requires-dist = [
     { name = "mkdocs-material", specifier = ">=9.7.0" },
     { name = "mutagen", specifier = ">=1.47.0" },
     { name = "pillow", specifier = ">=12.0.0" },
+    { name = "python-json-logger", specifier = ">=4.0.0" },
     { name = "tinytag", specifier = ">=2.1.2" },
+    { name = "tqdm", specifier = ">=4.67.1" },
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "whoosh", specifier = ">=2.7.4" },
 ]
@@ -483,6 +487,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-json-logger"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/bf/eca6a3d43db1dae7070f70e160ab20b807627ba953663ba07928cdd3dc58/python_json_logger-4.0.0.tar.gz", hash = "sha256:f58e68eb46e1faed27e0f574a55a0455eecd7b8a5b88b85a784519ba3cff047f", size = 17683, upload-time = "2025-10-06T04:15:18.984Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/e5/fecf13f06e5e5f67e8837d777d1bc43fac0ed2b77a676804df5c34744727/python_json_logger-4.0.0-py3-none-any.whl", hash = "sha256:af09c9daf6a813aa4cc7180395f50f2a9e5fa056034c9953aec92e381c5ba1e2", size = 15548, upload-time = "2025-10-06T04:15:17.553Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -561,6 +574,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f1/dc/a21d37263917e5e3aff95a70966c9be2bf550a792fc95008e2e444f0cd8c/tinytag-2.1.2.tar.gz", hash = "sha256:564e573e308d9fa78432493b4987fca1f84fb1f2ce29c586fc54629155e4fca0", size = 36639, upload-time = "2025-08-13T21:56:28.26Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/ca/37249dab162f3332223efade79272b40fd133b32b7abf51c6e86d55b3deb/tinytag-2.1.2-py3-none-any.whl", hash = "sha256:1a6b7b19c59ac4846b2446ec7a85cfaa17fbee6970592eaa5926702c261bad69", size = 31499, upload-time = "2025-08-13T21:56:26.722Z" },
+]
+
+[[package]]
+name = "tqdm"
+version = "4.67.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737, upload-time = "2024-11-24T20:12:22.481Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540, upload-time = "2024-11-24T20:12:19.698Z" },
 ]
 
 [[package]]

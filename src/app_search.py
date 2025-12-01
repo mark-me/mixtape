@@ -26,14 +26,14 @@ class MusicCollection:
         self.path_db = path_db / "music.db"
         self.supporter_extensions = {".mp3", ".flac", ".ogg", ".oga", ".m4a", ".mp4", ".wav", ".wma"}
 
-        self.schema = Schema(
+        self.schema_whoosh = Schema(
             path=ID(stored=True, unique=True),
             artist=TEXT(stored=True, phrase=False),
             album=TEXT(stored=True, phrase=False),
             title=TEXT(stored=True, phrase=False),
         )
 
-        self.ix = None
+        self.index_whoosh = None
         self.observer = None
         self._lock = threading.Lock()
 
@@ -64,7 +64,7 @@ class MusicCollection:
     def build_indexes(self):
         print("Building full index...")
         self._reset_indexes()
-        ix = create_in(self.path_index, self.schema)
+        ix = create_in(self.path_index, self.schema_whoosh)
         writer = ix.writer()
         conn = self.get_db_connection()
         conn.execute("DELETE FROM tracks")
@@ -139,7 +139,7 @@ class MusicCollection:
             print("No index found → building full index...")
             self.build_indexes()
 
-        self.ix = open_dir(self.path_index)
+        self.index_whoosh = open_dir(self.path_index)
 
     def search(self, query: str, limit: int = 200):
         if not query.strip():
@@ -149,8 +149,8 @@ class MusicCollection:
         return self._collect_search_hits(results)
 
     def _whoosh_search(self, query, limit):
-        with self.ix.searcher() as searcher:
-            parser = MultifieldParser(["artist", "album", "title"], self.ix.schema)
+        with self.index_whoosh.searcher() as searcher:
+            parser = MultifieldParser(["artist", "album", "title"], self.index_whoosh.schema)
             parser.add_plugin(FuzzyTermPlugin())
             q = parser.parse(f"{query}~1")
             return list(searcher.search(q, limit=limit))
@@ -214,7 +214,7 @@ class MusicCollection:
     def _update_single_file(self, filepath: Path):
         with self._lock:
             try:
-                writer = self.ix.writer()
+                writer = self.index_whoosh.writer()
                 conn = self.get_db_connection()
                 self._index_single_track(writer, conn, filepath)
                 writer.commit()
@@ -226,7 +226,7 @@ class MusicCollection:
     def _delete_file(self, filepath: Path):
         with self._lock:
             try:
-                writer = self.ix.writer()
+                writer = self.index_whoosh.writer()
                 writer.delete_by_term('path', str(filepath))
                 writer.commit()
 
