@@ -13,18 +13,40 @@ DB_PATH = Path(__file__).parent.parent / "collection-data" / "music.db"
 
 class MusicCollection:
     def __init__(self, music_root: Path, db_path: Path):
+        """Initializes a MusicCollection instance for managing a music library.
+
+        Sets up the music root directory, database path, and supported file types, and ensures the database schema is ready for use.
+
+        Args:
+            music_root: The root directory containing music files.
+            db_path: The path to the SQLite database file.
+        """
         self.music_root = music_root.resolve()
         self.db_path = db_path.resolve()
         self.supported = {".mp3", ".flac", ".ogg", ".oga", ".m4a", ".mp4", ".wav", ".wma"}
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
-    def get_conn(self):
+    def get_conn(self) -> sqlite3.Connection:
+        """Creates and returns a new SQLite database connection.
+
+        Opens a connection to the music collection database and sets the row factory for named access. Returns the connection object for use in database operations.
+
+        Returns:
+            sqlite3.Connection: A connection object to the music collection database.
+        """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _ensure_schema(self):
+        """Ensures the database schema for the music collection exists.
+
+        Creates the tracks table and necessary indexes if they do not already exist in the database.
+
+        Returns:
+            None
+        """
         with self.get_conn() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tracks (
@@ -47,13 +69,34 @@ class MusicCollection:
                 conn.execute(idx)
 
     def db_ready(self):
+        """Checks if the music database exists and contains at least one track.
+
+        Returns True if the database file exists and there is at least one track indexed. Otherwise, returns False.
+
+        Returns:
+            bool: True if the database is ready for use, False otherwise.
+        """
         return self.db_path.exists() and self.count_tracks() > 0
 
     def count_tracks(self):
+        """Returns the total number of tracks in the music collection.
+
+        Counts and returns the number of track records currently stored in the database.
+
+        Returns:
+            int: The total number of tracks in the collection.
+        """
         with self.get_conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
 
     def rebuild(self):
+        """Scans and reindexes the entire music collection.
+
+        Removes all existing track records and rebuilds the index from the music root directory. Prints progress and summary information to the console.
+
+        Returns:
+            None
+        """
         print("Scanning and indexing your music collection...")
         self._ensure_schema()
         with self.get_conn() as conn:
@@ -73,31 +116,45 @@ class MusicCollection:
         print(f"Done! Indexed {count:,} files in {time.time()-start:.1f}s\n")
 
     def _safe_int_year(self, value):
+        """Converts a value to an integer year if possible.
+
+        Attempts to extract and return a valid integer year from the input value. Returns None if the value cannot be interpreted as a year.
+
+        Args:
+            value: The value to convert to an integer year.
+
+        Returns:
+            int or None: The extracted year as an integer, or None if conversion is not possible.
+        """
         if not value: return None
         if isinstance(value, int): return value
         if isinstance(value, float): return int(value) if value == int(value) else None
         s = str(value).strip().split('-', 1)[0].split('.', 1)[0]
         return int(s) if s.isdigit() else None
 
-    def _index_file(self, conn, path: Path):
+    def _index_file(self, conn: sqlite3.Connection, path: Path):
+        """Indexes a single music file and updates the database with its metadata.
+
+        Extracts metadata from the given file and inserts or updates the corresponding record in the tracks table. If metadata extraction fails, the file is skipped.
+
+        Args:
+            conn: The SQLite database connection.
+            path: The path to the music file to index.
+
+        Returns:
+            None
+        """
         tag = None
         try:
             tag = TinyTag.get(path, tags=True, duration=True)
         except:
             pass
 
-        artist = (getattr(tag, "artist", None) or getattr(tag, "albumartist", None) or
-                  path.parent.parent.name or "Unknown").strip()
-        album = (getattr(tag, "album", None) or path.parent.name or "Unknown").strip()
-        title = (getattr(tag, "title", None) or path.stem).strip()
-
+        artist = self._extract_artist(tag, path)
+        album = self._extract_album(tag, path)
+        title = self._extract_title(tag, path)
         year = self._safe_int_year(getattr(tag, "year", None))
-        duration = None
-        if tag and getattr(tag, "duration", None):
-            try:
-                duration = float(tag.duration)
-            except:
-                pass
+        duration = self._extract_duration(tag)
 
         conn.execute("""INSERT OR REPLACE INTO tracks
             (path, filename, artist, album, title, albumartist, genre, year, duration)
@@ -108,7 +165,91 @@ class MusicCollection:
             year, duration
         ))
 
+    def _extract_artist(self, tag, path: Path) -> str:
+        """Extracts the artist name from tag or path.
+
+        Returns the artist name as a string, using tag metadata or directory names as fallback. If no artist is found, returns 'Unknown'.
+
+        Args:
+            tag: The metadata tag object from TinyTag.
+            path: The path to the music file.
+
+        Returns:
+            str: The extracted artist name.
+        """
+        artist = getattr(tag, "artist", None)
+        if not artist:
+            artist = getattr(tag, "albumartist", None)
+        if not artist:
+            parent_dir = path.parent.parent.name
+            artist = parent_dir if parent_dir else "Unknown"
+        return artist.strip() if artist else "Unknown"
+
+    def _extract_album(self, tag, path: Path) -> str:
+        """Extracts the album name from tag or path.
+
+        Returns the album name as a string, using tag metadata or directory names as fallback. If no album is found, returns 'Unknown'.
+
+        Args:
+            tag: The metadata tag object from TinyTag.
+            path: The path to the music file.
+
+        Returns:
+            str: The extracted album name.
+        """
+        album = getattr(tag, "album", None)
+        if not album:
+            parent_dir = path.parent.name
+            album = parent_dir or "Unknown"
+        return album.strip() if album else "Unknown"
+
+    def _extract_title(self, tag, path: Path) -> str:
+        """Extracts the track title from tag or path.
+
+        Returns the track title as a string, using tag metadata or the file stem as fallback. If no title is found, returns 'Unknown'.
+
+        Args:
+            tag: The metadata tag object from TinyTag.
+            path: The path to the music file.
+
+        Returns:
+            str: The extracted track title.
+        """
+        title = getattr(tag, "title", None) or path.stem
+        return title.strip() if title else "Unknown"
+
+    def _extract_duration(self, tag) -> float:
+        """Extracts the duration from the tag metadata.
+
+        Returns the duration as a float if available, otherwise returns None.
+
+        Args:
+            tag: The metadata tag object from TinyTag.
+
+        Returns:
+            float or None: The extracted duration in seconds, or None if not available.
+        """
+        duration = None
+        has_duration = tag and getattr(tag, "duration", None)
+        if has_duration:
+            try:
+                duration = float(tag.duration)
+            except Exception:
+                pass
+        return duration
+
     def search_grouped(self, query: str, limit: int = 20):
+        """Searches for artists, albums, and tracks matching the given query.
+
+        Returns a dictionary grouping the search results into artists, albums, and tracks. The number of results in each group is limited by the specified limit.
+
+        Args:
+            query: The search string to match against artists, albums, and tracks.
+            limit: The maximum number of results to return for each group.
+
+        Returns:
+            dict: A dictionary with keys 'artists', 'albums', and 'tracks', each containing a list of matching results.
+        """
         if not (q := query.strip()):
             return {"artists": [], "albums": [], "tracks": []}
 
@@ -117,60 +258,120 @@ class MusicCollection:
 
         with self.get_conn() as conn:
             result = {"artists": [], "albums": [], "tracks": []}
-
-            # 1. ARTISTS
-            cur = conn.execute("""
-                SELECT DISTINCT artist FROM tracks
-                WHERE artist LIKE ? COLLATE NOCASE
-                ORDER BY artist LIKE ? DESC, artist COLLATE NOCASE
-                LIMIT ?
-            """, (starts_pat, starts_pat, limit))
-            result["artists"] = [{"artist": r["artist"]} for r in cur]
-
-            # 2. ALBUMS
-            skip = {a["artist"].lower() for a in result["artists"]}
-            if skip:
-                placeholders = ",".join("?" for _ in skip)
-                sql = f"""
-                    SELECT DISTINCT artist, album FROM tracks
-                    WHERE album LIKE ? COLLATE NOCASE
-                      AND lower(artist) NOT IN ({placeholders})
-                    ORDER BY album LIKE ? DESC, album COLLATE NOCASE
-                    LIMIT ?
-                """
-                # like, starts, *skip (strings), limit (int) → correct order!
-                cur = conn.execute(sql, (like_pat, starts_pat, *skip, limit))
-            else:
-                cur = conn.execute("""
-                    SELECT DISTINCT artist, album FROM tracks
-                    WHERE album LIKE ? COLLATE NOCASE
-                    ORDER BY album LIKE ? DESC, album COLLATE NOCASE
-                    LIMIT ?
-                """, (like_pat, starts_pat, limit))
-            result["albums"] = [{"artist": r["artist"], "album": r["album"]} for r in cur]
-
-            # 3. TRACKS
-            skip.update(a["artist"].lower() for a in result["albums"])
-            if skip:
-                placeholders = ",".join("?" for _ in skip)
-                sql = f"""
-                    SELECT artist, album, title AS track FROM tracks
-                    WHERE title LIKE ? COLLATE NOCASE
-                      AND lower(artist) NOT IN ({placeholders})
-                    ORDER BY title LIKE ? DESC, title COLLATE NOCASE
-                    LIMIT ?
-                """
-                cur = conn.execute(sql, (like_pat, starts_pat, *skip, limit))
-            else:
-                cur = conn.execute("""
-                    SELECT artist, album, title AS track FROM tracks
-                    WHERE title LIKE ? COLLATE NOCASE
-                    ORDER BY title LIKE ? DESC, title COLLATE NOCASE
-                    LIMIT ?
-                """, (like_pat, starts_pat, limit))
-            result["tracks"] = [{"artist": r["artist"], "album": r["album"], "track": r["track"]} for r in cur]
-
+            result["artists"] = self._search_artists(conn, starts_pat, limit)
+            result["albums"] = self._search_albums(conn, like_pat, starts_pat, limit, result["artists"])
+            result["tracks"] = self._search_tracks(conn, like_pat, starts_pat, limit, result["artists"], result["albums"])
         return result
+
+    from typing import Any, List, Dict
+
+    def _search_artists(self, conn: sqlite3.Connection, starts_pat: str, limit: int) -> List[Dict[str, Any]]:
+        """Searches for artists whose names match the given pattern.
+
+        Returns a list of artist dictionaries matching the search criteria. The search is case-insensitive and limited to the specified number of results.
+
+        Args:
+            conn: The SQLite database connection.
+            starts_pat: The pattern to match artist names that start with the query.
+            limit: The maximum number of results to return.
+
+        Returns:
+            List[dict]: A list of dictionaries, each containing an artist name.
+        """
+        cur = conn.execute("""
+            SELECT DISTINCT artist FROM tracks
+            WHERE artist LIKE ? COLLATE NOCASE
+            ORDER BY artist LIKE ? DESC, artist COLLATE NOCASE
+            LIMIT ?
+        """, (starts_pat, starts_pat, limit))
+        return [{"artist": r["artist"]} for r in cur]
+
+    def _search_albums(
+        self,
+        conn: sqlite3.Connection,
+        like_pat: str,
+        starts_pat: str,
+        limit: int,
+        artists: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Searches for albums whose names match the given pattern.
+
+        Returns a list of album dictionaries matching the search criteria, excluding artists already found in previous searches. The search is case-insensitive and limited to the specified number of results.
+
+        Args:
+            conn: The SQLite database connection.
+            like_pat: The pattern to match album names.
+            starts_pat: The pattern to match album names that start with the query.
+            limit: The maximum number of results to return.
+            artists: A list of artist dictionaries to exclude from the search.
+
+        Returns:
+            List[dict]: A list of dictionaries, each containing artist and album name.
+        """
+        skip = {a["artist"].lower() for a in artists}
+        if skip:
+            placeholders = ",".join("?" for _ in skip)
+            sql = f"""
+                SELECT DISTINCT artist, album FROM tracks
+                WHERE album LIKE ? COLLATE NOCASE
+                  AND lower(artist) NOT IN ({placeholders})
+                ORDER BY album LIKE ? DESC, album COLLATE NOCASE
+                LIMIT ?
+            """
+            cur = conn.execute(sql, (like_pat, starts_pat, *skip, limit))
+        else:
+            cur = conn.execute("""
+                SELECT DISTINCT artist, album FROM tracks
+                WHERE album LIKE ? COLLATE NOCASE
+                ORDER BY album LIKE ? DESC, album COLLATE NOCASE
+                LIMIT ?
+            """, (like_pat, starts_pat, limit))
+        return [{"artist": r["artist"], "album": r["album"]} for r in cur]
+
+    def _search_tracks(
+        self,
+        conn: sqlite3.Connection,
+        like_pat: str,
+        starts_pat: str,
+        limit: int,
+        artists: List[Dict[str, Any]],
+        albums: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Searches for tracks whose titles match the given pattern.
+
+        Returns a list of track dictionaries matching the search criteria, excluding artists already found in previous searches. The search is case-insensitive and limited to the specified number of results.
+
+        Args:
+            conn: The SQLite database connection.
+            like_pat: The pattern to match track titles.
+            starts_pat: The pattern to match track titles that start with the query.
+            limit: The maximum number of results to return.
+            artists: A list of artist dictionaries to exclude from the search.
+            albums: A list of album dictionaries whose artists should also be excluded.
+
+        Returns:
+            List[dict]: A list of dictionaries, each containing artist, album, and track name.
+        """
+        skip = {a["artist"].lower() for a in artists}
+        skip.update(a["artist"].lower() for a in albums)
+        if skip:
+            placeholders = ",".join("?" for _ in skip)
+            sql = f"""
+                SELECT artist, album, title AS track FROM tracks
+                WHERE title LIKE ? COLLATE NOCASE
+                  AND lower(artist) NOT IN ({placeholders})
+                ORDER BY title LIKE ? DESC, title COLLATE NOCASE
+                LIMIT ?
+            """
+            cur = conn.execute(sql, (like_pat, starts_pat, *skip, limit))
+        else:
+            cur = conn.execute("""
+                SELECT artist, album, title AS track FROM tracks
+                WHERE title LIKE ? COLLATE NOCASE
+                ORDER BY title LIKE ? DESC, title COLLATE NOCASE
+                LIMIT ?
+            """, (like_pat, starts_pat, limit))
+        return [{"artist": r["artist"], "album": r["album"], "track": r["track"]} for r in cur]
 
 
 class MusicWatcher(FileSystemEventHandler):
@@ -185,7 +386,7 @@ class MusicWatcher(FileSystemEventHandler):
             else:
                 try:
                     self.collection._index_file(conn, path)
-                except:
+                except Exception:
                     pass
             conn.commit()
 
