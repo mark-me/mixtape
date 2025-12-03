@@ -329,7 +329,44 @@ class MusicCollection:
         """,
             (starts_pat, starts_pat, limit),
         )
-        return [{"artist": r["artist"]} for r in cur]
+        artists = [{"artist": r["artist"]} for r in cur]
+        for artist in artists:
+            artist.update(
+                {
+                    "albums": self._search_artist_albums(
+                        conn=conn, artist=artist["artist"]
+                    )
+                }
+            )
+        return artists
+
+    def _search_artist_albums(self, conn: sqlite3.Connection, artist: str):
+        sql = """
+                SELECT DISTINCT artist, album FROM tracks
+                WHERE artist = ?
+                ORDER BY album
+            """
+        cur = conn.execute(sql, (artist,))
+        albums = [{"album": r["album"]} for r in cur]
+        for album in albums:
+            album.update(
+                {
+                    "tracks": self._search_album_tracks(
+                        conn=conn, artist=artist, album=album["album"]
+                    )
+                }
+            )
+        return albums
+
+    def _search_album_tracks(self, conn: sqlite3.Connection, artist: str, album: str):
+        sql = """
+            SELECT DISTINCT path, filename, title FROM tracks
+            WHERE artist = ? AND album = ?
+            ORDER BY album;
+            """
+        cur = conn.execute(sql, (artist, album))
+        tracks = [{"track": r} for r in cur]
+        return tracks
 
     def _search_albums(
         self,
@@ -472,7 +509,7 @@ class MusicWatcher(FileSystemEventHandler):
 # ==================== MAIN ====================
 if __name__ == "__main__":
     if not MUSIC_ROOT.exists():
-        print(f"ERROR: Music folder not found: {MUSIC_ROOT}")
+        logger.error(f"ERROR: Music folder not found: {MUSIC_ROOT}")
         exit(1)
 
     collection = MusicCollection(MUSIC_ROOT, DB_PATH)
