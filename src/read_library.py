@@ -363,17 +363,16 @@ class MusicCollection:
                 ORDER BY album LIKE ? DESC, album COLLATE NOCASE
                 LIMIT ?
             """
-            cur = conn.execute(sql, (like_pat, starts_pat, *skip, limit))
+            params = (like_pat, starts_pat, *skip, limit)
         else:
-            cur = conn.execute(
-                """
+            sql = """
                 SELECT DISTINCT artist, album FROM tracks
                 WHERE album LIKE ? COLLATE NOCASE
                 ORDER BY album LIKE ? DESC, album COLLATE NOCASE
                 LIMIT ?
-            """,
-                (like_pat, starts_pat, limit),
-            )
+            """
+            params = (like_pat, starts_pat, limit)
+        cur = conn.execute(sql, params)
         return [{"artist": r["artist"], "album": r["album"]} for r in cur]
 
     def _search_tracks(
