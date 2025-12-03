@@ -3,9 +3,10 @@ import contextlib
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 from tinytag import TinyTag
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from logtools import get_logger
@@ -304,11 +305,9 @@ class MusicCollection:
             )
         return result
 
-    from typing import Any, Dict, List
-
     def _search_artists(
         self, conn: sqlite3.Connection, starts_pat: str, limit: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Searches for artists whose names match the given pattern.
 
         Returns a list of artist dictionaries matching the search criteria. The search is case-insensitive and limited to the specified number of results.
@@ -338,8 +337,8 @@ class MusicCollection:
         like_pat: str,
         starts_pat: str,
         limit: int,
-        artists: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        artists: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Searches for albums whose names match the given pattern.
 
         Returns a list of album dictionaries matching the search criteria, excluding artists already found in previous searches. The search is case-insensitive and limited to the specified number of results.
@@ -359,7 +358,7 @@ class MusicCollection:
             sql = f"""
                 SELECT DISTINCT artist, album FROM tracks
                 WHERE album LIKE ? COLLATE NOCASE
-                  AND lower(artist) NOT IN ({placeholders})
+                    AND lower(artist) NOT IN ({placeholders})
                 ORDER BY album LIKE ? DESC, album COLLATE NOCASE
                 LIMIT ?
             """
@@ -381,9 +380,9 @@ class MusicCollection:
         like_pat: str,
         starts_pat: str,
         limit: int,
-        artists: List[Dict[str, Any]],
-        albums: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        artists: list[dict[str, Any]],
+        albums: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Searches for tracks whose titles match the given pattern.
 
         Returns a list of track dictionaries matching the search criteria, excluding artists already found in previous searches. The search is case-insensitive and limited to the specified number of results.
@@ -432,6 +431,7 @@ class MusicWatcher(FileSystemEventHandler):
 
     Monitors the specified music directory for changes and ensures the music database stays in sync with file additions, deletions, and modifications.
     """
+
     def __init__(self, collection: MusicCollection):
         """Initializes a MusicWatcher to monitor file system events for a music collection.
 
