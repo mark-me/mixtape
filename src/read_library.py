@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
+import contextlib
 import sqlite3
 import time
 from pathlib import Path
+
 from tinytag import TinyTag
-from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+from logtools import get_logger
+
+logger = get_logger(__name__)
 
 # ==================== CONFIG ====================
 MUSIC_ROOT = Path("/home/mark/Music")
@@ -97,7 +103,7 @@ class MusicCollection:
         Returns:
             None
         """
-        print("Scanning and indexing your music collection...")
+        logger.info("Scanning and indexing your music collection...")
         self._ensure_schema()
         with self.get_conn() as conn:
             conn.execute("DELETE FROM tracks")
@@ -108,12 +114,12 @@ class MusicCollection:
                     try:
                         self._index_file(conn, fp)
                     except Exception as e:
-                        print(f"Warning: Skipping {fp.name}: {e}")
+                        logger.warning(f"Skipping {fp.name}: {e}")
                     count += 1
                     if count % 3000 == 0:
-                        print(f"   Processed {count:,} files...")
+                        logger.info(f"Processed {count:,} files...")
             conn.commit()
-        print(f"Done! Indexed {count:,} files in {time.time()-start:.1f}s\n")
+        logger.info(f"Done! Indexed {count:,} files in {time.time()-start:.1f}s\n")
 
     def _safe_int_year(self, value):
         """Converts a value to an integer year if possible.
@@ -145,11 +151,8 @@ class MusicCollection:
             None
         """
         tag = None
-        try:
+        with contextlib.suppress(Exception):
             tag = TinyTag.get(path, tags=True, duration=True)
-        except:
-            pass
-
         artist = self._extract_artist(tag, path)
         album = self._extract_album(tag, path)
         title = self._extract_title(tag, path)
@@ -239,12 +242,9 @@ class MusicCollection:
             float or None: The extracted duration in seconds, or None if not available.
         """
         duration = None
-        has_duration = tag and getattr(tag, "duration", None)
-        if has_duration:
-            try:
+        if has_duration := tag and getattr(tag, "duration", None):
+            with contextlib.suppress(Exception):
                 duration = float(tag.duration)
-            except Exception:
-                pass
         return duration
 
     def search_grouped(self, query: str, limit: int = 20):
@@ -266,13 +266,16 @@ class MusicCollection:
         starts_pat = f"{q}%"
 
         with self.get_conn() as conn:
-            result = {"artists": [], "albums": [], "tracks": []}
-            result["artists"] = self._search_artists(conn, starts_pat, limit)
+            result = {
+                "albums": [],
+                "tracks": [],
+                "artists": self._search_artists(conn, starts_pat, limit),
+            }
             result["albums"] = self._search_albums(conn, like_pat, starts_pat, limit, result["artists"])
             result["tracks"] = self._search_tracks(conn, like_pat, starts_pat, limit, result["artists"], result["albums"])
         return result
 
-    from typing import Any, List, Dict
+    from typing import Any, Dict, List
 
     def _search_artists(self, conn: sqlite3.Connection, starts_pat: str, limit: int) -> List[Dict[str, Any]]:
         """Searches for artists whose names match the given pattern.
@@ -317,8 +320,7 @@ class MusicCollection:
         Returns:
             List[dict]: A list of dictionaries, each containing artist and album name.
         """
-        skip = {a["artist"].lower() for a in artists}
-        if skip:
+        if skip := {a["artist"].lower() for a in artists}:
             placeholders = ",".join("?" for _ in skip)
             sql = f"""
                 SELECT DISTINCT artist, album FROM tracks
@@ -368,7 +370,7 @@ class MusicCollection:
             sql = f"""
                 SELECT artist, album, title AS track FROM tracks
                 WHERE title LIKE ? COLLATE NOCASE
-                  AND lower(artist) NOT IN ({placeholders})
+                    AND lower(artist) NOT IN ({placeholders})
                 ORDER BY title LIKE ? DESC, title COLLATE NOCASE
                 LIMIT ?
             """
@@ -393,10 +395,8 @@ class MusicWatcher(FileSystemEventHandler):
             if event.event_type == "deleted":
                 conn.execute("DELETE FROM tracks WHERE path = ?", (str(path),))
             else:
-                try:
+                with contextlib.suppress(Exception):
                     self.collection._index_file(conn, path)
-                except Exception:
-                    pass
             conn.commit()
 
 
@@ -407,13 +407,13 @@ if __name__ == "__main__":
         exit(1)
 
     collection = MusicCollection(MUSIC_ROOT, DB_PATH)
-    print(f"Music folder : {MUSIC_ROOT}")
-    print(f"Database     : {DB_PATH}\n")
+    logger.info(f"Music folder : {MUSIC_ROOT}")
+    logger.info(f"Database     : {DB_PATH}\n")
 
     if not collection.db_ready():
         collection.rebuild()
     else:
-        print(f"Library ready — {collection.count_tracks():,} tracks loaded\n")
+        logger.info(f"Library ready — {collection.count_tracks():,} tracks loaded\n")
 
     observer = Observer()
     observer.schedule(MusicWatcher(collection), str(MUSIC_ROOT), recursive=True)
@@ -423,8 +423,10 @@ if __name__ == "__main__":
     try:
         while True:
             q = input("> ").strip()
-            if q.lower() in {"q", "quit", "exit"}: break
-            if not q: continue
+            if q.lower() in {"q", "quit", "exit"}:
+                break
+            if not q:
+                continue
 
             t0 = time.time()
             result = collection.search_grouped(q, limit=20)
