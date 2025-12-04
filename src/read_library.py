@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import contextlib
 import sqlite3
 import time
@@ -268,9 +267,8 @@ class MusicCollection:
             float or None: The extracted duration in seconds, or None if not available.
         """
         duration = None
-        if has_duration := tag and getattr(tag, "duration", None):
-            with contextlib.suppress(Exception):
-                duration = float(tag.duration)
+        with contextlib.suppress(Exception):
+            duration = float(tag.duration)
         return duration
 
     def search_grouped(self, query: str, limit: int = 20):
