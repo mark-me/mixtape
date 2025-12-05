@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Muziek Playlist Builder</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Muziek Playlist Maker</h1>
+
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Zoek op artiest, album of nummer..." autocomplete="off">
+            <div id="loading" style="display:none;">Bezig met zoeken...</div>
+        </div>
+
+        <div class="main">
+            <!-- Linkerzijde: Bibliotheek -->
+            <div class="library">
+                <h2>Bibliotheek</h2>
+                <div id="results"></div>
+            </div>
+
+            <!-- Rechterzijde: Playlist -->
+            <div class="playlist-section">
+                <h2>Mijn Playlist <span id="playlist-count">(0)</span></h2>
+                <ol id="playlist"></ol>
+                <button id="clear-playlist" class="btn-danger">Playlist leegmaken</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const resultsDiv = document.getElementById('results');
+        const playlistOl = document.getElementById('playlist');
+        const playlistCount = document.getElementById('playlist-count');
+        let playlist = [];
+
+        // Live zoeken met debounce
+        let timeout;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(timeout);
+            document.getElementById('loading').style.display = 'block';
+            timeout = setTimeout(() => {
+                const q = searchInput.value.trim();
+                if (q.length < 2) {
+                    resultsDiv.innerHTML = '';
+                    document.getElementById('loading').style.display = 'none';
+                    return;
+                }
+                fetch(`/search?q=${encodeURIComponent(q)}`)
+                    .then(r => r.json())
+                    .then(data => {
+                    document.getElementById('loading').style.display = 'none';
+                        renderResults(data);
+                    });
+            }, 300);
+        });
+
+        function renderResults(data) {
+            if (data.length === 0) {
+                resultsDiv.innerHTML = '<p class="no-results">Geen resultaten gevonden.</p>';
+                return;
+            }
+
+            resultsDiv.innerHTML = data.map(entry => {
+                const reasonBadges = entry.reasons.map(r => {
+                    let icon = r.type === 'artist' ? 'Artiest' : r.type === 'album' ? 'Album' : 'Nummer';
+                    return `<span class="match-reason ${r.type}">${icon}: ${escapeHtml(r.text)}</span>`;
+                }).join(' ');
+
+                const tracksHtml = entry.tracks.map((track, idx) => {
+                    // Gebruik highlighted versie als die bestaat
+                    const highlighted = entry.highlighted_tracks?.find(h =>
+                        h.original.title === track.title
+                    );
+                    const displayTitle = highlighted ? highlighted.highlighted : track.title;
+
+                    return `
+                        <li class="track">
+                            <span class="track-title">${displayTitle}</span>
+                            <span class="duration">${track.duration}</span>
+                            <button class="add-btn"
+                                data-artist="${entry.artist}"
+                                data-album="${entry.album}"
+                                data-title="${track.title}"
+                                data-duration="${track.duration}">
+                                + Toevoegen
+                            </button>
+                        </li>
+                    `;
+                }).join('');
+
+            return `
+                <div class="artist-block">
+                    <div class="result-header">
+                        <h3 class="artist-name">${highlightText(entry.artist, searchInput.value)}</h3>
+                        <div class="match-reasons">${reasonBadges}</div>
+                    </div>
+                    <div class="album">
+                        <h4 class="album-title">${highlightText(entry.album, searchInput.value)}</h4>
+                        <ol class="tracklist">${tracksHtml}</ol>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+            document.querySelectorAll('.add-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const item = {
+                        artist: this.dataset.artist,
+                        album: this.dataset.album,
+                        title: this.dataset.title,
+                        duration: this.dataset.duration
+                    };
+                    addToPlaylist(item);
+                });
+            });
+        }
+
+        // Helper: highlight functie
+        function highlightText(text, query) {
+            if (!query.trim()) return escapeHtml(text);
+            const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
+            return escapeHtml(text).replace(regex, '<mark>$1</mark>');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function escapeRegex(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function addToPlaylist(item) {
+            if (!playlist.some(t => t.artist === item.artist && t.album === item.album && t.title === item.title)) {
+                playlist.push(item);
+                renderPlaylist();
+            }
+        }
+
+function renderPlaylist() {
+        playlistOl.innerHTML = playlist.map((item, index) => `
+            <li class="playlist-item" data-index="${index}">
+                <div class="drag-handle">⋮⋮</div>
+                <span class="track-info">
+                    <strong>${escapeHtml(item.title)}</strong><br>
+                    <small>${escapeHtml(item.artist)} • ${escapeHtml(item.album)}</small>
+                </span>
+                <span class="duration">${item.duration}</span>
+                <button class="remove-btn" data-index="${index}">×</button>
+            </li>
+        `).join('');
+
+        playlistCount.textContent = `(${playlist.length})`;
+
+        // Verwijderknoppen
+        document.querySelectorAll('.remove-btn').forEach(btn => {
+            btn.onclick = function () {
+                playlist.splice(this.dataset.index, 1);
+                renderPlaylist();
+            };
+        });
+    }
+
+    // DRAG & DROP REORDERING (dit is de magie!)
+    new Sortable(playlistOl, {
+        animation: 150,
+        ghostClass: 'playlist-ghost',
+        handle: '.drag-handle',           // je sleept alleen aan de "⋮⋮"
+        onEnd: function (evt) {
+            const oldIndex = evt.oldIndex;
+            const newIndex = evt.newIndex;
+
+            // Verplaats het item in de array
+            const movedItem = playlist.splice(oldIndex, 1)[0];
+            playlist.splice(newIndex, 0, movedItem);
+
+            // Her-render om de data-indexen weer kloppend te maken
+            renderPlaylist();
+        }
+    });
+
+    // Helper voor veilige HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    </script>
+</body>
+</html>
