@@ -27,6 +27,15 @@ class MusicCollection:
         music_root: Path | str,
         db_path: Path | str | None = None,
     ):
+        """
+        Initializes a MusicCollection instance for managing a music library.
+
+        Sets up the music root directory, database path, and ensures the database is in sync with the filesystem. Starts live monitoring and repairs any drift on startup.
+
+        Args:
+            music_root: The root directory containing music files.
+            db_path: Optional path to the SQLite database file. If not provided, a default path is used.
+        """
         self._extractor = CollectionExtractor(
             music_root=Path(music_root),
             db_path=Path(db_path) if db_path else None,
@@ -61,9 +70,20 @@ class MusicCollection:
         title: str | None = None,
         genre: str | None = None,
         year: int | None = None,
-    ) -> Iterator[Dict[str, Any]]:
-        """
-        Search tracks with optional filters (case-insensitive partial matches).
+    ) -> Iterator[dict[str, Any]]:
+        """Searches for tracks matching the given criteria.
+
+        Returns an iterator of track metadata dictionaries that match the specified artist, album, title, genre, and year filters.
+
+        Args:
+            artist: Optional artist name to filter tracks.
+            album: Optional album name to filter tracks.
+            title: Optional track title to filter tracks.
+            genre: Optional genre to filter tracks.
+            year: Optional year to filter tracks.
+
+        Returns:
+            Iterator[dict]: An iterator of track metadata dictionaries matching the criteria.
         """
         query = "SELECT * FROM tracks WHERE 1=1"
         params: list[Any] = []
@@ -91,13 +111,28 @@ class MusicCollection:
                 yield dict(row)
 
     def all_tracks(self) -> Iterator[Dict[str, Any]]:
-        """Yield all tracks."""
+        """Returns an iterator over all tracks in the music collection.
+
+        Yields each track's metadata as a dictionary, ordered by file path.
+
+        Returns:
+            Iterator[dict]: An iterator of track metadata dictionaries.
+        """
         with self._extractor.get_conn() as conn:
             for row in conn.execute("SELECT * FROM tracks ORDER BY path"):
                 yield dict(row)
 
     def get_by_path(self, path: str | Path) -> Dict[str, Any] | None:
-        """Get a single track by full file path."""
+        """Retrieves a track's metadata by its file path.
+
+        Returns the track's metadata as a dictionary if found, otherwise returns None.
+
+        Args:
+            path: The file path of the track to retrieve.
+
+        Returns:
+            dict or None: The track's metadata dictionary, or None if not found.
+        """
         with self._extractor.get_conn() as conn:
             row = conn.execute("SELECT * FROM tracks WHERE path = ?", (str(path),)).fetchone()
             return dict(row) if row else None
@@ -172,6 +207,17 @@ class MusicCollection:
         return artists
 
     def _search_artist_albums(self, conn: Connection, artist: str):
+        """Searches for albums by a specific artist.
+
+        Returns a list of album dictionaries for the given artist, each including its tracks. The search is case-insensitive and results are ordered by album name.
+
+        Args:
+            conn: The SQLite database connection.
+            artist: The artist name to search for.
+
+        Returns:
+            list[dict]: A list of dictionaries, each containing an album name and its tracks.
+        """
         sql = """
                 SELECT DISTINCT artist, album FROM tracks
                 WHERE artist = ?
@@ -189,7 +235,19 @@ class MusicCollection:
             )
         return albums
 
-    def _search_album_tracks(self, conn: Connection, artist: str, album: str):
+    def _search_album_tracks(self, conn: Connection, artist: str, album: str) -> list[dict]:
+        """Searches for tracks in a specific album by a specific artist.
+
+        Returns a list of track dictionaries for the given artist and album, including track title, filename, and path.
+
+        Args:
+            conn: The SQLite database connection.
+            artist: The artist name to search for.
+            album: The album name to search for.
+
+        Returns:
+            list[dict]: A list of dictionaries, each containing track title, filename, and path.
+        """
         sql = """
             SELECT DISTINCT title as track, path, filename
             FROM tracks
